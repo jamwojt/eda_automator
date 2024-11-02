@@ -1,0 +1,132 @@
+import os
+from io import BytesIO
+
+import pandas as pd
+from fasthtml import common as fh
+from matplotlib import pyplot as plt
+
+
+def save_plot(plot_fig, name):
+    os.makedirs("figures", exist_ok=True)
+    plot_fig.savefig(f"figures/{name}.png")
+
+
+def get_items_from_request(response: fh.FormData, *args) -> dict[str, str]:
+    values = {}
+    for key_name in args:
+        values[key_name] = response.get(key_name)
+
+    return values
+
+
+def get_plot_selectors(headers: list[str]):
+    column_selector_1 = fh.Select(
+        "Select column",
+        *[fh.Option(column_name, value=column_name) for column_name in headers],
+        id="column-selector-1",
+    )
+
+    column_selector_2 = fh.Select(
+        "Select column",
+        *[fh.Option(column_name, value=column_name) for column_name in headers],
+        id="column-selector-2",
+    )
+
+    plot_types = ["line", "scatter", "hist", "bar"]
+    plot_type_selector = fh.Select(
+        "Select plot type",
+        *[fh.Option(plot_type, value=plot_type) for plot_type in plot_types],
+        id="plot-type-selector",
+    )
+
+    plot_button = fh.Button(
+        "Plot",
+        type="submit",
+        hx_post="/get-plot",
+        hx_target="#plot-image",
+        hx_swap="outerHTML",
+    )
+
+    plot_selection = fh.Form(
+        column_selector_1,
+        column_selector_2,
+        plot_type_selector,
+        plot_button,
+        id="plot-selector-form",
+    )
+
+    return plot_selection
+
+
+def create_plot(type: str, x_col: pd.Series, y_col: pd.Series):
+    fig = plt.figure(figsize=(5, 5))
+    ax = plt.subplot(1, 1, 1)
+    if type == "scatter":
+        ax.scatter(x_col, y_col)
+        return ax, fig
+    if type == "hist":
+        ax.hist(x_col)
+        return ax, fig
+    if type == "line":
+        ax.plot(x_col, y_col)
+        return ax, fig
+    if type == "column":
+        ax.bar(x_col, y_col)
+        return ax, fig
+
+
+css = fh.Style(":root")
+app = fh.FastHTML(hdrs=(fh.picolink, css))
+
+
+@app.route("/", methods=["get"])
+def home():
+    welcome_sign = fh.Div(fh.H1("File analyzer"), id="welcome-sign")
+    upload_form = fh.Form(
+        fh.Input(type="file", id="file-input"),
+        fh.Button("Upload", type="submit"),
+        id="input-form",
+        hx_post="/load-file",
+        hx_target="#column-selector",
+        enctype="multipart/form-data",
+    )
+
+    file_selector_waiting_room = fh.P(id="column-selector", hx_swap_oob="outerHTML")
+
+    combiner = fh.Div(
+        welcome_sign, upload_form, file_selector_waiting_room, id="plot-setup-div"
+    )
+
+    image_placeholder = fh.Div(fh.Img(id="plot-image"), id="plot-div")
+
+    return fh.Title("File analyzer"), combiner, image_placeholder
+
+
+@app.route("/load-file", methods=["post"])
+async def load_file(request: fh.Request):
+    response = await request.form()
+    file_content = await response.get("file-input").read()
+    global df
+    df = pd.read_csv(BytesIO(file_content))
+    headers = list(df.columns)
+
+    selectors = get_plot_selectors(headers)
+
+    return selectors
+
+
+@app.route("/get-plot", methods=["post"])
+async def plot_data(request: fh.Request):
+    response = await request.form()
+    request_values = get_items_from_request(
+        response, "column-selector-1", "column-selector-2", "plot-type-selector"
+    )
+    ax, fig = create_plot(
+        request_values["plot-type-selector"],
+        df[request_values["column-selector-1"]],
+        df[request_values["column-selector-2"]],
+    )
+    save_plot(fig, "test_plot")
+
+    # return fh.FileResponse(path="figures/test_plot.png", media_type="image/png")
+    return fig
